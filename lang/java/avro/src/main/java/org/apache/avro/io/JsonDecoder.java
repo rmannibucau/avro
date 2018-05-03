@@ -20,6 +20,7 @@ package org.apache.avro.io;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
@@ -29,19 +30,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Stack;
 
+import javax.json.JsonNumber;
+import javax.json.stream.JsonParser;
+
 import org.apache.avro.AvroTypeException;
 import org.apache.avro.Schema;
 import org.apache.avro.io.parsing.JsonGrammarGenerator;
 import org.apache.avro.io.parsing.Parser;
 import org.apache.avro.io.parsing.Symbol;
 import org.apache.avro.util.Utf8;
-import org.codehaus.jackson.Base64Variant;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonLocation;
-import org.codehaus.jackson.JsonParser;
-import org.codehaus.jackson.JsonStreamContext;
-import org.codehaus.jackson.JsonToken;
-import org.codehaus.jackson.ObjectCodec;
+import org.apache.avro.util.internal.JsonUtils;
 
 /** A {@link Decoder} for Avro's JSON data encoding.
  * </p>
@@ -52,9 +50,10 @@ import org.codehaus.jackson.ObjectCodec;
 public class JsonDecoder extends ParsingDecoder
   implements Parser.ActionHandler {
   private JsonParser in;
-  private static JsonFactory jsonFactory = new JsonFactory();
   Stack<ReorderBuffer> reorderBuffers = new Stack<>();
   ReorderBuffer currentReorderBuffer;
+
+  private JsonParser.Event last;
 
   private static class ReorderBuffer {
     public Map<String, List<JsonElement>> savedFields = new HashMap<>();
@@ -107,8 +106,8 @@ public class JsonDecoder extends ParsingDecoder
     parser.reset();
     reorderBuffers.clear();
     currentReorderBuffer = null;
-    this.in = jsonFactory.createJsonParser(in);
-    this.in.nextToken();
+    this.in = JsonUtils.getParser().createParser(in);
+    this.in.next();
     return this;
   }
 
@@ -131,14 +130,14 @@ public class JsonDecoder extends ParsingDecoder
     parser.reset();
     reorderBuffers.clear();
     currentReorderBuffer = null;
-    this.in = new JsonFactory().createJsonParser(in);
-    this.in.nextToken();
+    this.in = JsonUtils.getParser().createParser(new StringReader(in));
+    last = this.in.next();
     return this;
   }
 
   private void advance(Symbol symbol) throws IOException {
     this.parser.processTrailingImplicitActions();
-    if (in.getCurrentToken() == null && this.parser.depth() == 1)
+    if (last == null && this.parser.depth() == 1)
       throw new EOFException();
     parser.advance(symbol);
   }
@@ -146,8 +145,8 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public void readNull() throws IOException {
     advance(Symbol.NULL);
-    if (in.getCurrentToken() == JsonToken.VALUE_NULL) {
-      in.nextToken();
+    if (last == JsonParser.Event.VALUE_NULL) {
+      last = in.next();
     } else {
       throw error("null");
     }
@@ -156,10 +155,10 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public boolean readBoolean() throws IOException {
     advance(Symbol.BOOLEAN);
-    JsonToken t = in.getCurrentToken();
-    if (t == JsonToken.VALUE_TRUE || t == JsonToken.VALUE_FALSE) {
-      in.nextToken();
-      return t == JsonToken.VALUE_TRUE;
+    JsonParser.Event t = last;
+    if (t == JsonParser.Event.VALUE_TRUE || t == JsonParser.Event.VALUE_FALSE) {
+      last = in.next();
+      return t == JsonParser.Event.VALUE_TRUE;
     } else {
       throw error("boolean");
     }
@@ -168,9 +167,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public int readInt() throws IOException {
     advance(Symbol.INT);
-    if (in.getCurrentToken().isNumeric()) {
-      int result = in.getIntValue();
-      in.nextToken();
+    if (last == JsonParser.Event.VALUE_NUMBER) {
+      int result = in.getInt();
+      last = in.next();
       return result;
     } else {
       throw error("int");
@@ -180,9 +179,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public long readLong() throws IOException {
     advance(Symbol.LONG);
-    if (in.getCurrentToken().isNumeric()) {
-      long result = in.getLongValue();
-      in.nextToken();
+    if (last == JsonParser.Event.VALUE_NUMBER) {
+      long result = in.getLong();
+      last = in.next();
       return result;
     } else {
       throw error("long");
@@ -192,9 +191,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public float readFloat() throws IOException {
     advance(Symbol.FLOAT);
-    if (in.getCurrentToken().isNumeric()) {
-      float result = in.getFloatValue();
-      in.nextToken();
+    if (last == JsonParser.Event.VALUE_NUMBER) {
+      float result = (float) JsonNumber.class.cast(in.getValue()).doubleValue();
+      last = in.next();
       return result;
     } else {
       throw error("float");
@@ -204,9 +203,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public double readDouble() throws IOException {
     advance(Symbol.DOUBLE);
-    if (in.getCurrentToken().isNumeric()) {
-      double result = in.getDoubleValue();
-      in.nextToken();
+    if (last == JsonParser.Event.VALUE_NUMBER) {
+      double result = JsonNumber.class.cast(in.getValue()).doubleValue();
+      last = in.next();
       return result;
     } else {
       throw error("double");
@@ -223,16 +222,16 @@ public class JsonDecoder extends ParsingDecoder
     advance(Symbol.STRING);
     if (parser.topSymbol() == Symbol.MAP_KEY_MARKER) {
       parser.advance(Symbol.MAP_KEY_MARKER);
-      if (in.getCurrentToken() != JsonToken.FIELD_NAME) {
+      if (last != JsonParser.Event.KEY_NAME) {
         throw error("map-key");
       }
     } else {
-      if (in.getCurrentToken() != JsonToken.VALUE_STRING) {
+      if (last != JsonParser.Event.VALUE_STRING) {
         throw error("string");
       }
     }
-    String result = in.getText();
-    in.nextToken();
+    String result = in.getString();
+    last = in.next();
     return result;
   }
 
@@ -241,23 +240,23 @@ public class JsonDecoder extends ParsingDecoder
     advance(Symbol.STRING);
     if (parser.topSymbol() == Symbol.MAP_KEY_MARKER) {
       parser.advance(Symbol.MAP_KEY_MARKER);
-      if (in.getCurrentToken() != JsonToken.FIELD_NAME) {
+      if (last != JsonParser.Event.KEY_NAME) {
         throw error("map-key");
       }
     } else {
-      if (in.getCurrentToken() != JsonToken.VALUE_STRING) {
+      if (last != JsonParser.Event.VALUE_STRING) {
         throw error("string");
       }
     }
-    in.nextToken();
+    last = in.next();
   }
 
   @Override
   public ByteBuffer readBytes(ByteBuffer old) throws IOException {
     advance(Symbol.BYTES);
-    if (in.getCurrentToken() == JsonToken.VALUE_STRING) {
+    if (last == JsonParser.Event.VALUE_STRING) {
       byte[] result = readByteArray();
-      in.nextToken();
+      last = in.next();
       return ByteBuffer.wrap(result);
     } else {
       throw error("bytes");
@@ -265,15 +264,15 @@ public class JsonDecoder extends ParsingDecoder
   }
 
   private byte[] readByteArray() throws IOException {
-    byte[] result = in.getText().getBytes(CHARSET);
+    byte[] result = in.getString().getBytes(CHARSET);
     return result;
   }
 
   @Override
   public void skipBytes() throws IOException {
     advance(Symbol.BYTES);
-    if (in.getCurrentToken() == JsonToken.VALUE_STRING) {
-      in.nextToken();
+    if (last == JsonParser.Event.VALUE_STRING) {
+      last = in.next();
     } else {
       throw error("bytes");
     }
@@ -292,9 +291,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public void readFixed(byte[] bytes, int start, int len) throws IOException {
     checkFixed(len);
-    if (in.getCurrentToken() == JsonToken.VALUE_STRING) {
+    if (last == JsonParser.Event.VALUE_STRING) {
       byte[] result = readByteArray();
-      in.nextToken();
+      last = in.next();
       if (result.length != len) {
         throw new AvroTypeException("Expected fixed length " + len
             + ", but got" + result.length);
@@ -312,9 +311,9 @@ public class JsonDecoder extends ParsingDecoder
   }
 
   private void doSkipFixed(int length) throws IOException {
-    if (in.getCurrentToken() == JsonToken.VALUE_STRING) {
+    if (last == JsonParser.Event.VALUE_STRING) {
       byte[] result = readByteArray();
-      in.nextToken();
+      last = in.next();
       if (result.length != length) {
         throw new AvroTypeException("Expected fixed length " + length
             + ", but got" + result.length);
@@ -335,14 +334,14 @@ public class JsonDecoder extends ParsingDecoder
   public int readEnum() throws IOException {
     advance(Symbol.ENUM);
     Symbol.EnumLabelsAction top = (Symbol.EnumLabelsAction) parser.popSymbol();
-    if (in.getCurrentToken() == JsonToken.VALUE_STRING) {
-      in.getText();
-      int n = top.findLabel(in.getText());
+    if (last == JsonParser.Event.VALUE_STRING) {
+      // in.getString();
+      int n = top.findLabel(in.getString());
       if (n >= 0) {
-        in.nextToken();
+        last = in.next();
         return n;
       }
-      throw new AvroTypeException("Unknown symbol in enum " + in.getText());
+      throw new AvroTypeException("Unknown symbol in enum " + in.getString());
     } else {
       throw error("fixed");
     }
@@ -351,8 +350,8 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public long readArrayStart() throws IOException {
     advance(Symbol.ARRAY_START);
-    if (in.getCurrentToken() == JsonToken.START_ARRAY) {
-      in.nextToken();
+    if (last == JsonParser.Event.START_ARRAY) {
+      last = in.next();
       return doArrayNext();
     } else {
       throw error("array-start");
@@ -366,9 +365,9 @@ public class JsonDecoder extends ParsingDecoder
   }
 
   private long doArrayNext() throws IOException {
-    if (in.getCurrentToken() == JsonToken.END_ARRAY) {
+    if (last == JsonParser.Event.END_ARRAY) {
       parser.advance(Symbol.ARRAY_END);
-      in.nextToken();
+      last = in.next();
       return 0;
     } else {
       return 1;
@@ -378,9 +377,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public long skipArray() throws IOException {
     advance(Symbol.ARRAY_START);
-    if (in.getCurrentToken() == JsonToken.START_ARRAY) {
-      in.skipChildren();
-      in.nextToken();
+    if (last == JsonParser.Event.START_ARRAY) {
+      // in.skipChildren();
+      last = in.next();
       advance(Symbol.ARRAY_END);
     } else {
       throw error("array-start");
@@ -391,8 +390,8 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public long readMapStart() throws IOException {
     advance(Symbol.MAP_START);
-    if (in.getCurrentToken() == JsonToken.START_OBJECT) {
-      in.nextToken();
+    if (last == JsonParser.Event.START_OBJECT) {
+      last = in.next();
       return doMapNext();
     } else {
       throw error("map-start");
@@ -406,8 +405,8 @@ public class JsonDecoder extends ParsingDecoder
   }
 
   private long doMapNext() throws IOException {
-    if (in.getCurrentToken() == JsonToken.END_OBJECT) {
-      in.nextToken();
+    if (last == JsonParser.Event.END_OBJECT) {
+      last = in.next();
       advance(Symbol.MAP_END);
       return 0;
     } else {
@@ -418,9 +417,9 @@ public class JsonDecoder extends ParsingDecoder
   @Override
   public long skipMap() throws IOException {
     advance(Symbol.MAP_START);
-    if (in.getCurrentToken() == JsonToken.START_OBJECT) {
-      in.skipChildren();
-      in.nextToken();
+    if (last == JsonParser.Event.START_OBJECT) {
+      // in.skipChildren();
+      last = in.next();
       advance(Symbol.MAP_END);
     } else {
       throw error("map-start");
@@ -434,12 +433,12 @@ public class JsonDecoder extends ParsingDecoder
     Symbol.Alternative a = (Symbol.Alternative) parser.popSymbol();
 
     String label;
-    if (in.getCurrentToken() == JsonToken.VALUE_NULL) {
+    if (last == JsonParser.Event.VALUE_NULL) {
       label = "null";
-    } else if (in.getCurrentToken() == JsonToken.START_OBJECT &&
-               in.nextToken() == JsonToken.FIELD_NAME) {
-      label = in.getText();
-      in.nextToken();
+    } else if (last == JsonParser.Event.START_OBJECT &&
+            (last = in.next()) == JsonParser.Event.KEY_NAME) {
+      label = in.getString();
+      last = in.next();
       parser.pushSymbol(Symbol.UNION_END);
     } else {
       throw error("start-union");
@@ -465,10 +464,10 @@ public class JsonDecoder extends ParsingDecoder
           return null;
         }
       }
-      if (in.getCurrentToken() == JsonToken.FIELD_NAME) {
+      if (last == JsonParser.Event.KEY_NAME) {
         do {
-          String fn = in.getText();
-          in.nextToken();
+          String fn = in.getString();
+          last = in.next();
           if (name.equals(fn)) {
             return null;
           } else {
@@ -477,7 +476,7 @@ public class JsonDecoder extends ParsingDecoder
             }
             currentReorderBuffer.savedFields.put(fn, getValueAsTree(in));
           }
-        } while (in.getCurrentToken() == JsonToken.FIELD_NAME);
+        } while (last == JsonParser.Event.KEY_NAME);
         throw new AvroTypeException("Expected field name not found: " + fa.fname);
       }
     } else if (top == Symbol.FIELD_END) {
@@ -486,16 +485,16 @@ public class JsonDecoder extends ParsingDecoder
         currentReorderBuffer.origParser = null;
       }
     } else if (top == Symbol.RECORD_START) {
-      if (in.getCurrentToken() == JsonToken.START_OBJECT) {
-        in.nextToken();
+      if (last == JsonParser.Event.START_OBJECT) {
+        last = in.next();
         reorderBuffers.push(currentReorderBuffer);
         currentReorderBuffer = null;
       } else {
         throw error("record-start");
       }
     } else if (top == Symbol.RECORD_END || top == Symbol.UNION_END) {
-      if (in.getCurrentToken() == JsonToken.END_OBJECT) {
-        in.nextToken();
+      if (last == JsonParser.Event.END_OBJECT) {
+        last = in.next();
         if (top == Symbol.RECORD_END) {
           if (currentReorderBuffer != null && !currentReorderBuffer.savedFields.isEmpty()) {
             throw error("Unknown fields: " + currentReorderBuffer.savedFields.keySet());
@@ -512,23 +511,23 @@ public class JsonDecoder extends ParsingDecoder
   }
 
   private static class JsonElement {
-    public final JsonToken token;
+    public final JsonParser.Event token;
     public final String value;
-    public JsonElement(JsonToken t, String value) {
+    public JsonElement(JsonParser.Event t, String value) {
       this.token = t;
       this.value = value;
     }
 
-    public JsonElement(JsonToken t) {
+    public JsonElement(JsonParser.Event t) {
       this(t, null);
     }
   }
 
-  private static List<JsonElement> getValueAsTree(JsonParser in) throws IOException {
+  private List<JsonElement> getValueAsTree(JsonParser in) throws IOException {
     int level = 0;
     List<JsonElement> result = new ArrayList<>();
     do {
-      JsonToken t = in.getCurrentToken();
+      JsonParser.Event t = last;
       switch (t) {
       case START_OBJECT:
       case START_ARRAY:
@@ -540,23 +539,25 @@ public class JsonDecoder extends ParsingDecoder
         level--;
         result.add(new JsonElement(t));
         break;
-      case FIELD_NAME:
+      case KEY_NAME:
       case VALUE_STRING:
-      case VALUE_NUMBER_INT:
-      case VALUE_NUMBER_FLOAT:
+      case VALUE_NUMBER:
       case VALUE_TRUE:
       case VALUE_FALSE:
       case VALUE_NULL:
-        result.add(new JsonElement(t, in.getText()));
+        result.add(new JsonElement(t, in.getString()));
         break;
       }
-      in.nextToken();
+      last = in.next();
     } while (level != 0);
     result.add(new JsonElement(null));
     return result;
   }
 
   private JsonParser makeParser(final List<JsonElement> elements) throws IOException {
+    // todo:
+    return null;
+    /*
     return new JsonParser() {
       int pos = 0;
 
@@ -576,15 +577,15 @@ public class JsonDecoder extends ParsingDecoder
       }
 
       @Override
-      public JsonToken nextToken() throws IOException {
+      public JsonParser.Event next() throws IOException {
         pos++;
         return elements.get(pos).token;
       }
 
       @Override
       public JsonParser skipChildren() throws IOException {
-        JsonToken tkn = elements.get(pos).token;
-        int level = (tkn == JsonToken.START_ARRAY || tkn == JsonToken.END_ARRAY) ? 1 : 0;
+        JsonParser.Event tkn = elements.get(pos).token;
+        int level = (tkn == JsonParser.Event.START_ARRAY || tkn == JsonParser.Event.END_ARRAY) ? 1 : 0;
         while (level > 0) {
           switch(elements.get(++pos).token) {
           case START_ARRAY:
@@ -626,22 +627,22 @@ public class JsonDecoder extends ParsingDecoder
       }
 
       @Override
-      public String getText() throws IOException {
+      public String getString() throws IOException {
         return elements.get(pos).value;
       }
 
       @Override
-      public char[] getTextCharacters() throws IOException {
+      public char[] getStringCharacters() throws IOException {
         throw new UnsupportedOperationException();
       }
 
       @Override
-      public int getTextLength() throws IOException {
+      public int getStringLength() throws IOException {
         throw new UnsupportedOperationException();
       }
 
       @Override
-      public int getTextOffset() throws IOException {
+      public int getStringOffset() throws IOException {
         throw new UnsupportedOperationException();
       }
 
@@ -657,12 +658,12 @@ public class JsonDecoder extends ParsingDecoder
 
       @Override
       public int getIntValue() throws IOException {
-        return Integer.parseInt(getText());
+        return Integer.parseInt(getString());
       }
 
       @Override
       public long getLongValue() throws IOException {
-        return Long.parseLong(getText());
+        return Long.parseLong(getString());
       }
 
       @Override
@@ -672,12 +673,12 @@ public class JsonDecoder extends ParsingDecoder
 
       @Override
       public float getFloatValue() throws IOException {
-        return Float.parseFloat(getText());
+        return Float.parseFloat(getString());
       }
 
       @Override
       public double getDoubleValue() throws IOException {
-        return Double.parseDouble(getText());
+        return Double.parseDouble(getString());
       }
 
       @Override
@@ -692,15 +693,16 @@ public class JsonDecoder extends ParsingDecoder
       }
 
       @Override
-      public JsonToken getCurrentToken() {
+      public JsonParser.Event getCurrentToken() {
         return elements.get(pos).token;
       }
     };
+    */
   }
 
   private AvroTypeException error(String type) {
     return new AvroTypeException("Expected " + type +
-        ". Got " + in.getCurrentToken());
+        ". Got " + last);
   }
 
 }

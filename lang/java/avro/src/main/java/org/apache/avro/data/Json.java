@@ -19,22 +19,17 @@ package org.apache.avro.data;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.StringReader;
 import java.util.Iterator;
 
-import org.apache.avro.util.internal.JacksonUtils;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.JsonParseException;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.node.JsonNodeFactory;
-import org.codehaus.jackson.node.LongNode;
-import org.codehaus.jackson.node.DoubleNode;
-import org.codehaus.jackson.node.TextNode;
-import org.codehaus.jackson.node.BooleanNode;
-import org.codehaus.jackson.node.NullNode;
-import org.codehaus.jackson.node.ArrayNode;
-import org.codehaus.jackson.node.ObjectNode;
+import javax.json.JsonArray;
+import javax.json.JsonArrayBuilder;
+import javax.json.JsonNumber;
+import javax.json.JsonObject;
+import javax.json.JsonObjectBuilder;
+import javax.json.JsonString;
+import javax.json.JsonValue;
+
+import org.apache.avro.util.internal.JsonUtils;
 
 import org.apache.avro.Schema;
 import org.apache.avro.AvroRuntimeException;
@@ -48,9 +43,6 @@ import org.apache.avro.io.ResolvingDecoder;
 /** Utilities for reading and writing arbitrary Json data in Avro format. */
 public class Json {
   private Json() {}                               // singleton: no public ctor
-
-  static final JsonFactory FACTORY = new JsonFactory();
-  static final ObjectMapper MAPPER = new ObjectMapper(FACTORY);
 
   /** The schema for Json data. */
   public static final Schema SCHEMA;
@@ -72,7 +64,7 @@ public class Json {
    * @deprecated use {@link ObjectWriter}
    */
   @Deprecated
-  public static class Writer implements DatumWriter<JsonNode> {
+  public static class Writer implements DatumWriter<JsonValue> {
 
     @Override public void setSchema(Schema schema) {
       if (!SCHEMA.equals(schema))
@@ -80,7 +72,7 @@ public class Json {
     }
 
     @Override
-    public void write(JsonNode datum, Encoder out) throws IOException {
+    public void write(JsonValue datum, Encoder out) throws IOException {
       Json.write(datum, out);
     }
   }
@@ -90,7 +82,7 @@ public class Json {
    * @deprecated use {@link ObjectReader}
    */
   @Deprecated
-  public static class Reader implements DatumReader<JsonNode> {
+  public static class Reader implements DatumReader<JsonValue> {
     private Schema written;
     private ResolvingDecoder resolver;
 
@@ -99,7 +91,7 @@ public class Json {
     }
 
     @Override
-    public JsonNode read(JsonNode reuse, Decoder in) throws IOException {
+    public JsonValue read(JsonValue reuse, Decoder in) throws IOException {
       if (written == null)                        // same schema
         return Json.read(in);
 
@@ -107,7 +99,7 @@ public class Json {
       if (resolver == null)
         resolver = DecoderFactory.get().resolvingDecoder(written, SCHEMA, null);
       resolver.configure(in);
-      JsonNode result = Json.read(resolver);
+      JsonValue result = Json.read(resolver);
       resolver.drain();
       return result;
     }
@@ -158,14 +150,7 @@ public class Json {
    * {@link org.apache.avro.JsonProperties}.
    */
   public static Object parseJson(String s) {
-    try {
-      return JacksonUtils.toObject(MAPPER.readTree(FACTORY.createJsonParser(
-          new StringReader(s))));
-    } catch (JsonParseException e) {
-      throw new RuntimeException(e);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
-    }
+    return JsonUtils.toObject(JsonUtils.getJsonB().fromJson(s, JsonValue.class));
   }
 
   /**
@@ -173,7 +158,7 @@ public class Json {
    * {@link org.apache.avro.JsonProperties} to a JSON string.
    */
   public static String toString(Object datum) {
-    return JacksonUtils.toJsonNode(datum).toString();
+    return JsonUtils.toJsonValue(datum).toString();
   }
 
   /** Note: this enum must be kept aligned with the union in Json.avsc. */
@@ -184,57 +169,61 @@ public class Json {
    * @deprecated internal method
    */
   @Deprecated
-  public static void write(JsonNode node, Encoder out) throws IOException {
-    switch(node.asToken()) {
-    case VALUE_NUMBER_INT:
-      out.writeIndex(JsonType.LONG.ordinal());
-      out.writeLong(node.getLongValue());
-      break;
-    case VALUE_NUMBER_FLOAT:
-      out.writeIndex(JsonType.DOUBLE.ordinal());
-      out.writeDouble(node.getDoubleValue());
-      break;
-    case VALUE_STRING:
+  public static void write(JsonValue node, Encoder out) throws IOException {
+    switch(node.getValueType()) {
+    case NUMBER:
+      JsonNumber number = JsonNumber.class.cast(node);
+      if (number.isIntegral()) { // todo: check it is what we want
+        out.writeIndex(JsonType.LONG.ordinal());
+        out.writeLong(number.longValue());
+      } else {
+        out.writeIndex(JsonType.DOUBLE.ordinal());
+        out.writeDouble(number.doubleValue());
+      }
+    break;
+    case STRING:
       out.writeIndex(JsonType.STRING.ordinal());
-      out.writeString(node.getTextValue());
+      out.writeString(JsonString.class.cast(node).getString());
       break;
-    case VALUE_TRUE:
+    case TRUE:
       out.writeIndex(JsonType.BOOLEAN.ordinal());
       out.writeBoolean(true);
       break;
-    case VALUE_FALSE:
+    case FALSE:
       out.writeIndex(JsonType.BOOLEAN.ordinal());
       out.writeBoolean(false);
       break;
-    case VALUE_NULL:
+    case NULL:
       out.writeIndex(JsonType.NULL.ordinal());
       out.writeNull();
       break;
-    case START_ARRAY:
+    case ARRAY:
       out.writeIndex(JsonType.ARRAY.ordinal());
       out.writeArrayStart();
-      out.setItemCount(node.size());
-      for (JsonNode element : node) {
+      JsonArray array = node.asJsonArray();
+      out.setItemCount(array.size());
+      for (JsonValue element : array) {
         out.startItem();
         write(element, out);
       }
       out.writeArrayEnd();
       break;
-    case START_OBJECT:
+      case OBJECT:
       out.writeIndex(JsonType.OBJECT.ordinal());
       out.writeMapStart();
-      out.setItemCount(node.size());
-      Iterator<String> i = node.getFieldNames();
+      JsonObject object = node.asJsonObject();
+      out.setItemCount(object.size());
+      Iterator<String> i = object.keySet().iterator();
       while (i.hasNext()) {
         out.startItem();
         String name = i.next();
         out.writeString(name);
-        write(node.get(name), out);
+        write(object.get(name), out);
       }
       out.writeMapEnd();
       break;
     default:
-      throw new AvroRuntimeException(node.asToken()+" unexpected: "+node);
+      throw new AvroRuntimeException(node.getValueType()+" unexpected: "+node);
     }
   }
 
@@ -243,42 +232,42 @@ public class Json {
    * @deprecated internal method
    */
   @Deprecated
-  public static JsonNode read(Decoder in) throws IOException {
+  public static JsonValue read(Decoder in) throws IOException {
     switch (JsonType.values()[in.readIndex()]) {
     case LONG:
-      return new LongNode(in.readLong());
+      return JsonUtils.getProvider().createValue(in.readLong());
     case DOUBLE:
-      return new DoubleNode(in.readDouble());
+      return JsonUtils.getProvider().createValue(in.readDouble());
     case STRING:
-      return new TextNode(in.readString());
+      return JsonUtils.getProvider().createValue(in.readString());
     case BOOLEAN:
-      return in.readBoolean() ? BooleanNode.TRUE : BooleanNode.FALSE;
+      return in.readBoolean() ? JsonValue.TRUE : JsonValue.FALSE;
     case NULL:
       in.readNull();
-      return NullNode.getInstance();
+      return JsonValue.NULL;
     case ARRAY:
-      ArrayNode array = JsonNodeFactory.instance.arrayNode();
+      JsonArrayBuilder array = JsonUtils.getBuilder().createArrayBuilder();
       for (long l = in.readArrayStart(); l > 0; l = in.arrayNext())
         for (long i = 0; i < l; i++)
           array.add(read(in));
-      return array;
+      return array.build();
     case OBJECT:
-      ObjectNode object = JsonNodeFactory.instance.objectNode();
+      JsonObjectBuilder object = JsonUtils.getBuilder().createObjectBuilder();
       for (long l = in.readMapStart(); l > 0; l = in.mapNext())
         for (long i = 0; i < l; i++)
-          object.put(in.readString(), read(in));
-      return object;
+          object.add(in.readString(), read(in));
+      return object.build();
     default:
       throw new AvroRuntimeException("Unexpected Json node type");
     }
   }
 
   private static void writeObject(Object datum, Encoder out) throws IOException {
-    write(JacksonUtils.toJsonNode(datum), out);
+    write(JsonUtils.toJsonValue(datum), out);
   }
 
   private static Object readObject(Decoder in) throws IOException {
-    return JacksonUtils.toObject(read(in));
+    return JsonUtils.toObject(read(in));
   }
 
 }

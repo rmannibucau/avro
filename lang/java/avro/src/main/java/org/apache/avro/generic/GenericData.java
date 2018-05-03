@@ -31,6 +31,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import javax.json.JsonValue;
+
 import org.apache.avro.AvroMissingFieldException;
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.AvroTypeException;
@@ -51,8 +53,6 @@ import org.apache.avro.io.DatumReader;
 import org.apache.avro.io.DatumWriter;
 import org.apache.avro.io.parsing.ResolvingGrammarGenerator;
 import org.apache.avro.util.Utf8;
-
-import org.codehaus.jackson.JsonNode;
 
 import com.google.common.collect.MapMaker;
 
@@ -994,11 +994,11 @@ public class GenericData {
    */
   @SuppressWarnings({ "rawtypes", "unchecked" })
   public Object getDefaultValue(Field field) {
-    JsonNode json = field.defaultValue();
+    JsonValue json = field.defaultValue();
     if (json == null)
       throw new AvroMissingFieldException("Field " + field
                                           + " not set and has no default value", field);
-    if (json.isNull()
+    if (json.getValueType() == JsonValue.ValueType.NULL
         && (field.schema().getType() == Type.NULL
             || (field.schema().getType() == Type.UNION
                 && field.schema().getTypes().get(0).getType() == Type.NULL))) {

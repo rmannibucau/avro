@@ -25,12 +25,17 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import javax.json.JsonArray;
+import javax.json.JsonNumber;
+import javax.json.JsonObject;
+import javax.json.JsonString;
+import javax.json.JsonValue;
+
 import org.apache.avro.AvroTypeException;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
 import org.apache.avro.io.Encoder;
 import org.apache.avro.io.EncoderFactory;
-import org.codehaus.jackson.JsonNode;
 
 /**
  * The class that generates a resolving grammar to resolve between two
@@ -301,7 +306,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
    * @return  The binary encoded version of <tt>n</tt>.
    * @throws IOException
    */
-  private static byte[] getBinary(Schema s, JsonNode n) throws IOException {
+  private static byte[] getBinary(Schema s, JsonValue n) throws IOException {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     Encoder e = factory.binaryEncoder(out, null);
     encode(e, s, n);
@@ -319,13 +324,13 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
    * @deprecated internal method
    */
   @Deprecated
-  public static void encode(Encoder e, Schema s, JsonNode n)
+  public static void encode(Encoder e, Schema s, JsonValue n)
     throws IOException {
     switch (s.getType()) {
     case RECORD:
       for (Field f : s.getFields()) {
         String name = f.name();
-        JsonNode v = n.get(name);
+        JsonValue v = n.asJsonObject().get(name);
         if (v == null) {
           v = f.defaultValue();
         }
@@ -336,13 +341,14 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
       }
       break;
     case ENUM:
-      e.writeEnum(s.getEnumOrdinal(n.getTextValue()));
+      e.writeEnum(s.getEnumOrdinal(JsonString.class.cast(n).getString()));
       break;
     case ARRAY:
       e.writeArrayStart();
-      e.setItemCount(n.size());
+      JsonArray array = n.asJsonArray();
+      e.setItemCount(array.size());
       Schema i = s.getElementType();
-      for (JsonNode node : n) {
+      for (JsonValue node : array) {
         e.startItem();
         encode(e, i, node);
       }
@@ -350,13 +356,14 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
       break;
     case MAP:
       e.writeMapStart();
-      e.setItemCount(n.size());
+      JsonObject object = n.asJsonObject();
+      e.setItemCount(object.size());
       Schema v = s.getValueType();
-      for (Iterator<String> it = n.getFieldNames(); it.hasNext();) {
+      for (Iterator<String> it = object.keySet().iterator(); it.hasNext();) {
         e.startItem();
         String key = it.next();
         e.writeString(key);
-        encode(e, v, n.get(key));
+        encode(e, v, object.get(key));
       }
       e.writeMapEnd();
       break;
@@ -365,51 +372,51 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
       encode(e, s.getTypes().get(0), n);
       break;
     case FIXED:
-      if (!n.isTextual())
+      if (n.getValueType() != JsonValue.ValueType.STRING)
         throw new AvroTypeException("Non-string default value for fixed: "+n);
-      byte[] bb = n.getTextValue().getBytes("ISO-8859-1");
+      byte[] bb = JsonString.class.cast(n).getString().getBytes("ISO-8859-1");
       if (bb.length != s.getFixedSize()) {
         bb = Arrays.copyOf(bb, s.getFixedSize());
       }
       e.writeFixed(bb);
       break;
     case STRING:
-      if (!n.isTextual())
+      if (n.getValueType() != JsonValue.ValueType.STRING)
         throw new AvroTypeException("Non-string default value for string: "+n);
-      e.writeString(n.getTextValue());
+      e.writeString(JsonString.class.cast(n).getString());
       break;
     case BYTES:
-      if (!n.isTextual())
+      if (n.getValueType() != JsonValue.ValueType.STRING)
         throw new AvroTypeException("Non-string default value for bytes: "+n);
-      e.writeBytes(n.getTextValue().getBytes("ISO-8859-1"));
+      e.writeBytes(JsonString.class.cast(n).getString().getBytes("ISO-8859-1"));
       break;
     case INT:
-      if (!n.isNumber())
+      if (n.getValueType() != JsonValue.ValueType.NUMBER)
         throw new AvroTypeException("Non-numeric default value for int: "+n);
-      e.writeInt(n.getIntValue());
+      e.writeInt(JsonNumber.class.cast(n).intValue());
       break;
     case LONG:
-      if (!n.isNumber())
+      if (n.getValueType() != JsonValue.ValueType.NUMBER)
         throw new AvroTypeException("Non-numeric default value for long: "+n);
-      e.writeLong(n.getLongValue());
+      e.writeLong(JsonNumber.class.cast(n).longValue());
       break;
     case FLOAT:
-      if (!n.isNumber())
+      if (n.getValueType() != JsonValue.ValueType.NUMBER)
         throw new AvroTypeException("Non-numeric default value for float: "+n);
-      e.writeFloat((float) n.getDoubleValue());
+      e.writeFloat((float) JsonNumber.class.cast(n).doubleValue());
       break;
     case DOUBLE:
-      if (!n.isNumber())
+      if (n.getValueType() != JsonValue.ValueType.NUMBER)
         throw new AvroTypeException("Non-numeric default value for double: "+n);
-      e.writeDouble(n.getDoubleValue());
+      e.writeDouble(JsonNumber.class.cast(n).doubleValue());
       break;
     case BOOLEAN:
-      if (!n.isBoolean())
+      if (n.getValueType() != JsonValue.ValueType.TRUE && n.getValueType() != JsonValue.ValueType.FALSE)
         throw new AvroTypeException("Non-boolean default for boolean: "+n);
-      e.writeBoolean(n.getBooleanValue());
+      e.writeBoolean(JsonValue.TRUE.equals(n));
       break;
     case NULL:
-      if (!n.isNull())
+      if (n.getValueType() != JsonValue.ValueType.NULL)
         throw new AvroTypeException("Non-null default value for null type: "+n);
       e.writeNull();
       break;

@@ -26,15 +26,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+import javax.json.JsonValue;
 
 import org.apache.avro.Schema.Field;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.util.internal.JacksonUtils;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.io.JsonStringEncoder;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.codehaus.jackson.node.TextNode;
+import org.apache.avro.util.internal.JsonUtils;
 
 /**
  * <p>
@@ -329,7 +329,7 @@ public class SchemaBuilder {
    * can have arbitrary string key-value properties.
    */
   public static abstract class PropBuilder<S extends PropBuilder<S>> {
-    private Map<String, JsonNode> props = null;
+    private Map<String, JsonValue> props = null;
     protected PropBuilder() {
     }
 
@@ -337,18 +337,18 @@ public class SchemaBuilder {
      * Set name-value pair properties for this type or field.
      */
     public final S prop(String name, String val) {
-      return prop(name, TextNode.valueOf(val));
+      return prop(name, JsonUtils.getProvider().createValue(val));
     }
 
     /**
      * Set name-value pair properties for this type or field.
      */
     public final S prop(String name, Object value) {
-      return prop(name, JacksonUtils.toJsonNode(value));
+      return prop(name, JsonUtils.toJsonValue(value));
     }
 
     // for internal use by the Parser
-    final S prop(String name, JsonNode val) {
+    final S prop(String name, JsonValue val) {
       if(!hasProps()) {
         props = new HashMap<>();
       }
@@ -362,7 +362,7 @@ public class SchemaBuilder {
 
     final <T extends JsonProperties> T addPropsTo(T jsonable) {
       if (hasProps()) {
-        for(Map.Entry<String, JsonNode> prop : props.entrySet()) {
+        for(Map.Entry<String, JsonValue> prop : props.entrySet()) {
           jsonable.addProp(prop.getKey(), prop.getValue());
         }
       }
@@ -2126,7 +2126,7 @@ public class SchemaBuilder {
     }
 
     private FieldAssembler<R> completeField(Schema schema, Object defaultVal) {
-      JsonNode defaultNode = toJsonNode(defaultVal);
+      JsonValue defaultNode = toJsonNode(defaultVal);
       return completeField(schema, defaultNode);
     }
 
@@ -2134,7 +2134,7 @@ public class SchemaBuilder {
       return completeField(schema, null);
     }
 
-    private FieldAssembler<R> completeField(Schema schema, JsonNode defaultVal) {
+    private FieldAssembler<R> completeField(Schema schema, JsonValue defaultVal) {
       Field field = new Field(name(), schema, doc(), defaultVal, order);
       addPropsTo(field);
       addAliasesTo(field);
@@ -2587,7 +2587,7 @@ public class SchemaBuilder {
   }
 
   // create default value JsonNodes from objects
-  private static JsonNode toJsonNode(Object o) {
+  private static JsonValue toJsonNode(Object o) {
     try {
       String s;
       if (o instanceof ByteBuffer) {
@@ -2599,18 +2599,86 @@ public class SchemaBuilder {
         bytes.get(data);
         bytes.reset(); // put the buffer back the way we got it
         s = new String(data, "ISO-8859-1");
-        char[] quoted = JsonStringEncoder.getInstance().quoteAsString(s);
+        char[] quoted = Strings.escape(s).toCharArray();
         s = "\"" + new String(quoted) + "\"";
       } else if (o instanceof byte[]) {
         s = new String((byte[]) o, "ISO-8859-1");
-        char[] quoted = JsonStringEncoder.getInstance().quoteAsString(s);
+        char[] quoted = Strings.escape(s).toCharArray();
         s = '\"' + new String(quoted) + '\"';
       } else {
         s = GenericData.get().toString(o);
       }
-      return new ObjectMapper().readTree(s);
+      return JsonUtils.getJsonB().fromJson(s, JsonValue.class);
     } catch (IOException e) {
       throw new SchemaBuilderException(e);
+    }
+  }
+
+  // takend from johnzon
+  private static class Strings {
+    private static final String UNICODE_PREFIX = "\\u";
+    private static final String UNICODE_PREFIX_HELPER = "000";
+    private static final ConcurrentMap<Character, String> UNICODE_CACHE = new ConcurrentHashMap<Character, String>();
+
+    static String escape(final String value) {
+
+      if(value == null || value.length()==0) {
+        return value;
+      }
+
+      final StringBuilder builder = new StringBuilder();
+      for (int i = 0; i < value.length(); i++) {
+        final char c = value.charAt(i);
+        switch (c) {
+          case '\'':
+          case '\\':
+            builder.append('\\').append(c);
+            break;
+          default:
+            if (c < ' ') { // we could do a single switch but actually we should rarely enter this if so no need to pay it
+              switch (c) {
+                case '\n':
+                  builder.append("\\n");
+                  break;
+                case '\r':
+                  builder.append("\\r");
+                  break;
+                case '\t':
+                  builder.append("\\t");
+                  break;
+                case '\b':
+                  builder.append("\\b");
+                  break;
+                case '\f':
+                  builder.append("\\f");
+                  break;
+                default:
+                  builder.append(toUnicode(c));
+              }
+            } else if ((c >= '\u0080' && c < '\u00a0') || (c >= '\u2000' && c < '\u2100')) {
+              builder.append(toUnicode(c));
+            } else {
+              builder.append(c);
+            }
+        }
+      }
+      return builder.toString();
+    }
+
+    private static String toUnicode(final char c) {
+      final String found = UNICODE_CACHE.get(c);
+      if (found != null) {
+        return found;
+      }
+
+      final String hex = UNICODE_PREFIX_HELPER + Integer.toHexString(c);
+      final String s = UNICODE_PREFIX + hex.substring(hex.length() - 4);
+      UNICODE_CACHE.putIfAbsent(c, s);
+      return s;
+    }
+
+    private Strings() {
+      // no-op
     }
   }
 }

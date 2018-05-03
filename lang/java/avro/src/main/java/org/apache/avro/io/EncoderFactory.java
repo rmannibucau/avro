@@ -20,9 +20,10 @@ package org.apache.avro.io;
 import java.io.IOException;
 import java.io.OutputStream;
 
+import javax.json.stream.JsonGenerator;
+
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
-import org.codehaus.jackson.JsonGenerator;
 
 /**
  * A factory for creating and configuring {@link Encoder} instances.

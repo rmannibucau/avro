@@ -20,7 +20,10 @@ package org.apache.avro.io;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.BitSet;
+
+import javax.json.stream.JsonGenerator;
 
 import org.apache.avro.AvroTypeException;
 import org.apache.avro.Schema;
@@ -28,11 +31,7 @@ import org.apache.avro.io.parsing.JsonGrammarGenerator;
 import org.apache.avro.io.parsing.Parser;
 import org.apache.avro.io.parsing.Symbol;
 import org.apache.avro.util.Utf8;
-import org.codehaus.jackson.JsonEncoding;
-import org.codehaus.jackson.JsonFactory;
-import org.codehaus.jackson.JsonGenerator;
-import org.codehaus.jackson.util.DefaultPrettyPrinter;
-import org.codehaus.jackson.util.MinimalPrettyPrinter;
+import org.apache.avro.util.internal.JsonUtils;
 
 /** An {@link Encoder} for Avro's JSON data encoding.
  * </p>
@@ -76,12 +75,12 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
 
   // by default, one object per line.
   // with pretty option use default pretty printer with root line separator.
-  private static JsonGenerator getJsonGenerator(OutputStream out, boolean pretty)
-      throws IOException {
+  private static JsonGenerator getJsonGenerator(OutputStream out, boolean pretty) {
     if (null == out)
       throw new NullPointerException("OutputStream cannot be null");
-    JsonGenerator g
-      = new JsonFactory().createJsonGenerator(out, JsonEncoding.UTF8);
+    JsonGenerator g = (pretty ? JsonUtils.getPrettyFactory() : JsonUtils.getDefaultFactory())
+      .createGenerator(out, StandardCharsets.UTF_8);
+    /* todo?
     if (pretty) {
       DefaultPrettyPrinter pp = new DefaultPrettyPrinter() {
         //@Override
@@ -97,6 +96,7 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
       pp.setRootValueSeparator(LINE_SEPARATOR);
       g.setPrettyPrinter(pp);
     }
+    */
     return g;
   }
 
@@ -153,31 +153,31 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
   @Override
   public void writeBoolean(boolean b) throws IOException {
     parser.advance(Symbol.BOOLEAN);
-    out.writeBoolean(b);
+    out.write(b);
   }
 
   @Override
   public void writeInt(int n) throws IOException {
     parser.advance(Symbol.INT);
-    out.writeNumber(n);
+    out.write(n);
   }
 
   @Override
   public void writeLong(long n) throws IOException {
     parser.advance(Symbol.LONG);
-    out.writeNumber(n);
+    out.write(n);
   }
 
   @Override
   public void writeFloat(float f) throws IOException {
     parser.advance(Symbol.FLOAT);
-    out.writeNumber(f);
+    out.write(f);
   }
 
   @Override
   public void writeDouble(double d) throws IOException {
     parser.advance(Symbol.DOUBLE);
-    out.writeNumber(d);
+    out.write(d);
   }
 
   @Override
@@ -190,9 +190,9 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
     parser.advance(Symbol.STRING);
     if (parser.topSymbol() == Symbol.MAP_KEY_MARKER) {
       parser.advance(Symbol.MAP_KEY_MARKER);
-      out.writeFieldName(str);
+      out.write(str);
     } else {
-      out.writeString(str);
+      out.write(str);
     }
   }
 
@@ -215,7 +215,7 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
 
   private void writeByteArray(byte[] bytes, int start, int len)
     throws IOException {
-    out.writeString(
+    out.write(
         new String(bytes, start, len, JsonDecoder.CHARSET));
   }
 
@@ -240,7 +240,7 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
           "Enumeration out of range: max is " +
           top.size + " but received " + e);
     }
-    out.writeString(top.getLabel(e));
+    out.write(top.getLabel(e));
   }
 
   @Override
@@ -258,7 +258,7 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
     }
     pop();
     parser.advance(Symbol.ARRAY_END);
-    out.writeEndArray();
+    out.writeEnd();
   }
 
   @Override
@@ -278,7 +278,7 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
     pop();
 
     parser.advance(Symbol.MAP_END);
-    out.writeEndObject();
+    out.writeEnd();
   }
 
   @Override
@@ -296,8 +296,7 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
     Symbol.Alternative top = (Symbol.Alternative) parser.popSymbol();
     Symbol symbol = top.getSymbol(unionIndex);
     if (symbol != Symbol.NULL) {
-      out.writeStartObject();
-      out.writeFieldName(top.getLabel(unionIndex));
+      out.writeStartObject(top.getLabel(unionIndex));
       parser.pushSymbol(Symbol.UNION_END);
     }
     parser.pushSymbol(symbol);
@@ -307,11 +306,11 @@ public class JsonEncoder extends ParsingEncoder implements Parser.ActionHandler 
   public Symbol doAction(Symbol input, Symbol top) throws IOException {
     if (top instanceof Symbol.FieldAdjustAction) {
       Symbol.FieldAdjustAction fa = (Symbol.FieldAdjustAction) top;
-      out.writeFieldName(fa.fname);
+      out.write(fa.fname);
     } else if (top == Symbol.RECORD_START) {
       out.writeStartObject();
     } else if (top == Symbol.RECORD_END || top == Symbol.UNION_END) {
-      out.writeEndObject();
+      out.writeEnd();
     } else if (top != Symbol.FIELD_END) {
       throw new AvroTypeException("Unknown action symbol " + top);
     }

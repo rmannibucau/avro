@@ -90,11 +90,6 @@
       <artifactId>libthrift</artifactId>
       <version>${thrift.version}</version>
     </dependency>
-    <dependency>
-      <groupId>org.codehaus.jackson</groupId>
-      <artifactId>jackson-core-asl</artifactId>
-      <version>${jackson.version}</version>
-    </dependency>
   </dependencies>
 
 </project>

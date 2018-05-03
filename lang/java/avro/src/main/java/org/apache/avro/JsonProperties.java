@@ -21,12 +21,12 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
-import java.io.IOException;
 
-import org.apache.avro.util.internal.JacksonUtils;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.JsonGenerator;
-import org.codehaus.jackson.node.TextNode;
+import javax.json.JsonString;
+import javax.json.JsonValue;
+import javax.json.stream.JsonGenerator;
+
+import org.apache.avro.util.internal.JsonUtils;
 
 /**
  * Base class for objects that have JSON-valued properties. Avro and JSON values are
@@ -114,7 +114,7 @@ public abstract class JsonProperties {
   /** A value representing a JSON <code>null</code>. */
   public static final Null NULL_VALUE = new Null();
 
-  Map<String,JsonNode> props = new LinkedHashMap<>(1);
+  Map<String,JsonValue> props = new LinkedHashMap<>(1);
 
   private Set<String> reserved;
 
@@ -127,8 +127,8 @@ public abstract class JsonProperties {
    * Returns <tt>null</tt> if there is no string-valued property with that name.
    */
   public String getProp(String name) {
-    JsonNode value = getJsonProp(name);
-    return value != null && value.isTextual() ? value.getTextValue() : null;
+    JsonValue value = getJsonProp(name);
+    return value != null && value.getValueType() == JsonValue.ValueType.STRING ? JsonString.class.cast(value).getString() : null;
   }
 
   /**
@@ -137,7 +137,7 @@ public abstract class JsonProperties {
    * @deprecated use {@link #getObjectProp(String)}
    */
   @Deprecated
-  public synchronized JsonNode getJsonProp(String name) {
+  public synchronized JsonValue getJsonProp(String name) {
     return props.get(name);
   }
 
@@ -146,7 +146,7 @@ public abstract class JsonProperties {
    * Returns <tt>null</tt> if there is no property with that name.
    */
   public synchronized Object getObjectProp(String name) {
-    return JacksonUtils.toObject(props.get(name));
+    return JsonUtils.toObject(props.get(name));
   }
 
   /**
@@ -159,7 +159,7 @@ public abstract class JsonProperties {
    * @param value The value for the property to add
    */
   public void addProp(String name, String value) {
-    addProp(name, TextNode.valueOf(value));
+    addProp(name, JsonUtils.getProvider().createValue(value));
   }
 
   /**
@@ -173,14 +173,14 @@ public abstract class JsonProperties {
    * @deprecated use {@link #addProp(String, Object)}
    */
   @Deprecated
-  public synchronized void addProp(String name, JsonNode value) {
+  public synchronized void addProp(String name, JsonValue value) {
     if (reserved.contains(name))
       throw new AvroRuntimeException("Can't set reserved property: " + name);
 
     if (value == null)
       throw new AvroRuntimeException("Can't set a property to null: " + name);
 
-    JsonNode old = props.get(name);
+    JsonValue old = props.get(name);
     if (old == null)
       props.put(name, value);
     else if (!old.equals(value))
@@ -188,23 +188,23 @@ public abstract class JsonProperties {
   }
 
   public synchronized void addProp(String name, Object value) {
-    addProp(name, JacksonUtils.toJsonNode(value));
+    addProp(name, JsonUtils.toJsonValue(value));
   }
 
   /** Return the defined properties that have string values. */
   @Deprecated public Map<String,String> getProps() {
     Map<String,String> result = new LinkedHashMap<>();
-    for (Map.Entry<String,JsonNode> e : props.entrySet())
-      if (e.getValue().isTextual())
-        result.put(e.getKey(), e.getValue().getTextValue());
+    for (Map.Entry<String,JsonValue> e : props.entrySet())
+      if (e.getValue().getValueType() == JsonValue.ValueType.STRING)
+        result.put(e.getKey(), JsonString.class.cast(e.getValue()).getString());
     return result;
   }
 
   /** Convert a map of string-valued properties to Json properties. */
-  Map<String,JsonNode> jsonProps(Map<String,String> stringProps) {
-    Map<String,JsonNode> result = new LinkedHashMap<>();
+  Map<String,JsonValue> jsonProps(Map<String,String> stringProps) {
+    Map<String,JsonValue> result = new LinkedHashMap<>();
     for (Map.Entry<String,String> e : stringProps.entrySet())
-      result.put(e.getKey(), TextNode.valueOf(e.getValue()));
+      result.put(e.getKey(), JsonUtils.getProvider().createValue(e.getValue()));
     return result;
   }
 
@@ -213,21 +213,21 @@ public abstract class JsonProperties {
    * @deprecated use {@link #getObjectProps()}
    */
   @Deprecated
-  public Map<String,JsonNode> getJsonProps() {
+  public Map<String,JsonValue> getJsonProps() {
     return Collections.unmodifiableMap(props);
   }
 
   /** Return the defined properties as an unmodifiable Map. */
   public Map<String,Object> getObjectProps() {
     Map<String,Object> result = new LinkedHashMap<>();
-    for (Map.Entry<String,JsonNode> e : props.entrySet())
-      result.put(e.getKey(), JacksonUtils.toObject(e.getValue()));
+    for (Map.Entry<String,JsonValue> e : props.entrySet())
+      result.put(e.getKey(), JsonUtils.toObject(e.getValue()));
     return result;
   }
 
-  void writeProps(JsonGenerator gen) throws IOException {
-    for (Map.Entry<String,JsonNode> e : props.entrySet())
-      gen.writeObjectField(e.getKey(), e.getValue());
+  void writeProps(JsonGenerator gen) {
+    for (Map.Entry<String,JsonValue> e : props.entrySet())
+      gen.write(e.getKey(), e.getValue());
   }
 
 }

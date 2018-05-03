@@ -17,8 +17,8 @@
  */
 package org.apache.avro;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.StringWriter;
 import java.io.IOException;
@@ -33,11 +33,13 @@ import java.util.Collections;
 import java.util.Set;
 import java.util.HashSet;
 
+import javax.json.JsonObject;
+import javax.json.JsonString;
+import javax.json.JsonValue;
+import javax.json.stream.JsonGenerator;
+
 import org.apache.avro.Schema.Field;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.JsonParser;
-import org.codehaus.jackson.JsonGenerator;
-import org.codehaus.jackson.node.TextNode;
+import org.apache.avro.util.internal.JsonUtils;
 
 /** A set of messages forming an application protocol.
  * <p> A protocol consists of:
@@ -95,8 +97,8 @@ public class Protocol extends JsonProperties {
           Object value = prop.getValue();
           this.addProp(prop.getKey(),
                        value instanceof String
-                       ? TextNode.valueOf((String)value)
-                       : (JsonNode)value);
+                       ? JsonUtils.getProvider().createValue((String)value)
+                       : (JsonValue) value);
         }
     }
 
@@ -117,9 +119,9 @@ public class Protocol extends JsonProperties {
     public String toString() {
       try {
         StringWriter writer = new StringWriter();
-        JsonGenerator gen = Schema.FACTORY.createJsonGenerator(writer);
+        JsonGenerator gen = Schema.FACTORY.createGenerator(writer);
         toJson(gen);
-        gen.flush();
+        gen.close();
         return writer.toString();
       } catch (IOException e) {
         throw new AvroRuntimeException(e);
@@ -127,18 +129,18 @@ public class Protocol extends JsonProperties {
     }
     void toJson(JsonGenerator gen) throws IOException {
       gen.writeStartObject();
-      if (doc != null) gen.writeStringField("doc", doc);
+      if (doc != null) gen.write("doc", doc);
       writeProps(gen);                           // write out properties
-      gen.writeFieldName("request");
+      gen.write("request");
       request.fieldsToJson(types, gen);
 
       toJson1(gen);
-      gen.writeEndObject();
+      gen.writeEnd();
     }
 
     void toJson1(JsonGenerator gen) throws IOException {
-      gen.writeStringField("response", "null");
-      gen.writeBooleanField("one-way", true);
+      gen.write("response", "null");
+      gen.write("one-way", true);
     }
 
     public boolean equals(Object o) {
@@ -187,13 +189,13 @@ public class Protocol extends JsonProperties {
     }
 
     @Override void toJson1(JsonGenerator gen) throws IOException {
-      gen.writeFieldName("response");
+      gen.write("response");
       response.toJson(types, gen);
 
       List<Schema> errs = errors.getTypes();  // elide system error
       if (errs.size() > 1) {
         Schema union = Schema.createUnion(errs.subList(1, errs.size()));
-        gen.writeFieldName("errors");
+        gen.write("errors");
         union.toJson(types, gen);
       }
     }
@@ -316,8 +318,7 @@ public class Protocol extends JsonProperties {
   public String toString(boolean pretty) {
     try {
       StringWriter writer = new StringWriter();
-      JsonGenerator gen = Schema.FACTORY.createJsonGenerator(writer);
-      if (pretty) gen.useDefaultPrettyPrinter();
+      JsonGenerator gen = (pretty ? Schema.PRETTY_FACTORY : Schema.FACTORY).createGenerator(writer);
       toJson(gen);
       gen.flush();
       return writer.toString();
@@ -329,25 +330,25 @@ public class Protocol extends JsonProperties {
     types.space(namespace);
 
     gen.writeStartObject();
-    gen.writeStringField("protocol", name);
-    gen.writeStringField("namespace", namespace);
+    gen.write("protocol", name);
+    gen.write("namespace", namespace);
 
-    if (doc != null) gen.writeStringField("doc", doc);
+    if (doc != null) gen.write("doc", doc);
     writeProps(gen);
-    gen.writeArrayFieldStart("types");
+    gen.writeStartArray("types");
     Schema.Names resolved = new Schema.Names(namespace);
     for (Schema type : types.values())
       if (!resolved.contains(type))
         type.toJson(resolved, gen);
-    gen.writeEndArray();
+    gen.writeEnd();
 
-    gen.writeObjectFieldStart("messages");
+    gen.writeStartObject("messages");
     for (Map.Entry<String,Message> e : messages.entrySet()) {
-      gen.writeFieldName(e.getKey());
+      gen.write(e.getKey());
       e.getValue().toJson(gen);
     }
-    gen.writeEndObject();
-    gen.writeEndObject();
+    gen.writeEnd();
+    gen.writeEnd();
   }
 
   /** Return the MD5 hash of the text of this protocol. */
@@ -364,12 +365,16 @@ public class Protocol extends JsonProperties {
 
   /** Read a protocol from a Json file. */
   public static Protocol parse(File file) throws IOException {
-    return parse(Schema.FACTORY.createJsonParser(file));
+    return parse(new FileInputStream(file));
   }
 
   /** Read a protocol from a Json stream. */
   public static Protocol parse(InputStream stream) throws IOException {
-    return parse(Schema.FACTORY.createJsonParser(stream));
+    try {
+      return parse(Schema.MAPPER.fromJson(stream, JsonValue.class));
+    } finally {
+      stream.close();
+    }
   }
 
   /** Read a protocol from one or more json strings */
@@ -382,143 +387,135 @@ public class Protocol extends JsonProperties {
 
   /** Read a protocol from a Json string. */
   public static Protocol parse(String string) {
-    try {
-      return parse(Schema.FACTORY.createJsonParser
-                   (new ByteArrayInputStream(string.getBytes("UTF-8"))));
-    } catch (IOException e) {
-      throw new AvroRuntimeException(e);
-    }
+    return parse(Schema.MAPPER.fromJson(string, JsonValue.class));
   }
 
-  private static Protocol parse(JsonParser parser) {
-    try {
-      Protocol protocol = new Protocol();
-      protocol.parse(Schema.MAPPER.readTree(parser));
-      return protocol;
-    } catch (IOException e) {
-      throw new SchemaParseException(e);
-    }
+  private static Protocol parse(JsonValue json) {
+    Protocol protocol = new Protocol();
+    protocol.parseNamespace(json);
+    protocol.parseName(json);
+    protocol.parseTypes(json);
+    protocol.parseMessages(json);
+    protocol.parseDoc(json);
+    protocol.parseProps(json);
+    return protocol;
   }
 
-  private void parse(JsonNode json) {
-    parseNamespace(json);
-    parseName(json);
-    parseTypes(json);
-    parseMessages(json);
-    parseDoc(json);
-    parseProps(json);
-  }
-
-  private void parseNamespace(JsonNode json) {
-    JsonNode nameNode = json.get("namespace");
+  private void parseNamespace(JsonValue json) {
+    JsonValue nameNode = json.asJsonObject().get("namespace");
     if (nameNode == null) return;                 // no namespace defined
-    this.namespace = nameNode.getTextValue();
+    this.namespace = JsonString.class.cast(nameNode).getString();
     types.space(this.namespace);
   }
 
-  private void parseDoc(JsonNode json) {
+  private void parseDoc(JsonValue json) {
     this.doc = parseDocNode(json);
   }
 
-  private String parseDocNode(JsonNode json) {
-    JsonNode nameNode = json.get("doc");
+  private String parseDocNode(JsonValue json) {
+    JsonValue nameNode = json.asJsonObject().get("doc");
     if (nameNode == null) return null;                 // no doc defined
-    return nameNode.getTextValue();
+    return JsonString.class.cast(nameNode).getString();
   }
 
-  private void parseName(JsonNode json) {
-    JsonNode nameNode = json.get("protocol");
+  private void parseName(JsonValue json) {
+    JsonValue nameNode = json.asJsonObject().get("protocol");
     if (nameNode == null)
       throw new SchemaParseException("No protocol name specified: "+json);
-    this.name = nameNode.getTextValue();
+    this.name = JsonString.class.cast(nameNode).getString();
   }
 
-  private void parseTypes(JsonNode json) {
-    JsonNode defs = json.get("types");
+  private void parseTypes(JsonValue json) {
+    JsonValue defs = json.asJsonObject().get("types");
     if (defs == null) return;                    // no types defined
-    if (!defs.isArray())
+    if (defs.getValueType() != JsonValue.ValueType.ARRAY)
       throw new SchemaParseException("Types not an array: "+defs);
-    for (JsonNode type : defs) {
-      if (!type.isObject())
+    for (JsonValue type : defs.asJsonArray()) {
+      if (type.getValueType() != JsonValue.ValueType.OBJECT)
         throw new SchemaParseException("Type not an object: "+type);
       Schema.parse(type, types);
     }
   }
 
-  private void parseProps(JsonNode json) {
-    for (Iterator<String> i = json.getFieldNames(); i.hasNext();) {
+  private void parseProps(JsonValue json) {
+    JsonObject jsonObject = json.asJsonObject();
+    for (Iterator<String> i = jsonObject.keySet().iterator(); i.hasNext();) {
       String p = i.next();                        // add non-reserved as props
       if (!PROTOCOL_RESERVED.contains(p))
-        this.addProp(p, json.get(p));
+        this.addProp(p, jsonObject.get(p));
     }
   }
 
-  private void parseMessages(JsonNode json) {
-    JsonNode defs = json.get("messages");
+  private void parseMessages(JsonValue json) {
+    JsonObject jsonObject = json.asJsonObject();
+    JsonValue defs = jsonObject.get("messages");
     if (defs == null) return;                    // no messages defined
-    for (Iterator<String> i = defs.getFieldNames(); i.hasNext();) {
+    for (Iterator<String> i = jsonObject.keySet().iterator(); i.hasNext();) {
       String prop = i.next();
-      this.messages.put(prop, parseMessage(prop, defs.get(prop)));
+      this.messages.put(prop, parseMessage(prop, jsonObject.get(prop)));
     }
   }
 
-  private Message parseMessage(String messageName, JsonNode json) {
+  private Message parseMessage(String messageName, JsonValue json) {
     String doc = parseDocNode(json);
 
-    Map<String,JsonNode> mProps = new LinkedHashMap<>();
-    for (Iterator<String> i = json.getFieldNames(); i.hasNext();) {
+    JsonObject jsonObject = json.asJsonObject();
+    Map<String,JsonValue> mProps = new LinkedHashMap<>();
+    for (Iterator<String> i = jsonObject.keySet().iterator(); i.hasNext();) {
       String p = i.next();                        // add non-reserved as props
       if (!MESSAGE_RESERVED.contains(p))
-        mProps.put(p, json.get(p));
+        mProps.put(p, jsonObject.get(p));
     }
 
-    JsonNode requestNode = json.get("request");
-    if (requestNode == null || !requestNode.isArray())
+    JsonValue requestNode = jsonObject.get("request");
+    if (requestNode == null || requestNode.getValueType() != JsonValue.ValueType.ARRAY)
       throw new SchemaParseException("No request specified: "+json);
     List<Field> fields = new ArrayList<>();
-    for (JsonNode field : requestNode) {
-      JsonNode fieldNameNode = field.get("name");
+    for (JsonValue field : requestNode.asJsonArray()) {
+      JsonObject object = field.asJsonObject();
+      JsonValue fieldNameNode = object.get("name");
       if (fieldNameNode == null)
         throw new SchemaParseException("No param name: "+field);
-      JsonNode fieldTypeNode = field.get("type");
+      JsonValue fieldTypeNode = object.get("type");
       if (fieldTypeNode == null)
         throw new SchemaParseException("No param type: "+field);
-      String name = fieldNameNode.getTextValue();
+      String name = JsonString.class.cast(fieldNameNode).getString();
       String fieldDoc = null;
-      JsonNode fieldDocNode = field.get("doc");
+      JsonValue fieldDocNode = object.get("doc");
       if (fieldDocNode != null)
-        fieldDoc = fieldDocNode.getTextValue();
+        fieldDoc = JsonString.class.cast(fieldDocNode).getString();
       Field newField = new Field(name, Schema.parse(fieldTypeNode,types),
-                                 fieldDoc, field.get("default"));
+                                 fieldDoc, object.get("default"));
       Set<String> aliases = Schema.parseAliases(field);
       if (aliases != null) {                      // add aliases
         for (String alias : aliases)
           newField.addAlias(alias);
       }
 
-      Iterator<String> i = field.getFieldNames();
+      Iterator<String> i = object.keySet().iterator();
       while (i.hasNext()) {                       // add properties
         String prop = i.next();
         if (!FIELD_RESERVED.contains(prop))      // ignore reserved
-          newField.addProp(prop, field.get(prop));
+          newField.addProp(prop, object.get(prop));
       }
       fields.add(newField);
     }
     Schema request = Schema.createRecord(fields);
 
     boolean oneWay = false;
-    JsonNode oneWayNode = json.get("one-way");
+    JsonObject object = json.asJsonObject();
+    JsonValue oneWayNode = object.get("one-way");
     if (oneWayNode != null) {
-      if (!oneWayNode.isBoolean())
+      if (oneWayNode.getValueType() != JsonValue.ValueType.TRUE && oneWayNode.getValueType() != JsonValue.ValueType.FALSE)
         throw new SchemaParseException("one-way must be boolean: "+json);
-      oneWay = oneWayNode.getBooleanValue();
+      oneWay = JsonValue.TRUE.equals(oneWayNode);
     }
 
-    JsonNode responseNode = json.get("response");
+    JsonValue responseNode = object.get("response");
     if (!oneWay && responseNode == null)
       throw new SchemaParseException("No response specified: "+json);
 
-    JsonNode decls = json.get("errors");
+    JsonValue decls = object.get("errors");
 
     if (oneWay) {
       if (decls != null)
@@ -534,10 +531,10 @@ public class Protocol extends JsonProperties {
     List<Schema> errs = new ArrayList<>();
     errs.add(SYSTEM_ERROR);                       // every method can throw
     if (decls != null) {
-      if (!decls.isArray())
+      if (decls.getValueType() != JsonValue.ValueType.ARRAY)
         throw new SchemaParseException("Errors not an array: "+json);
-      for (JsonNode decl : decls) {
-        String name = decl.getTextValue();
+      for (JsonValue decl : decls.asJsonArray()) {
+        String name = JsonString.class.cast(decl).getString();
         Schema schema = this.types.get(name);
         if (schema == null)
           throw new SchemaParseException("Undefined error: "+name);

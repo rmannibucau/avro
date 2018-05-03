@@ -32,12 +32,12 @@ import org.codehaus.jackson.node.ObjectNode;
 import org.codehaus.jackson.node.TextNode;
 import org.junit.Test;
 
-import static org.apache.avro.util.internal.JacksonUtils.toJsonNode;
-import static org.apache.avro.util.internal.JacksonUtils.toObject;
+import static org.apache.avro.util.internal.JsonUtils.toJsonValue;
+import static org.apache.avro.util.internal.JsonUtils.toObject;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
-public class TestJacksonUtils {
+public class TestJsonUtils {
 
   enum Direction {
     UP, DOWN;
@@ -45,24 +45,24 @@ public class TestJacksonUtils {
 
   @Test
   public void testToJsonNode() {
-    assertEquals(null, toJsonNode(null));
-    assertEquals(NullNode.getInstance(), toJsonNode(JsonProperties.NULL_VALUE));
-    assertEquals(BooleanNode.TRUE, toJsonNode(true));
-    assertEquals(IntNode.valueOf(1), toJsonNode(1));
-    assertEquals(LongNode.valueOf(2), toJsonNode(2L));
-    assertEquals(DoubleNode.valueOf(1.0), toJsonNode(1.0f));
-    assertEquals(DoubleNode.valueOf(2.0), toJsonNode(2.0));
-    assertEquals(TextNode.valueOf("\u0001\u0002"), toJsonNode(new byte[] { 1, 2 }));
-    assertEquals(TextNode.valueOf("a"), toJsonNode("a"));
-    assertEquals(TextNode.valueOf("UP"), toJsonNode(Direction.UP));
+    assertEquals(null, toJsonValue(null));
+    assertEquals(NullNode.getInstance(), toJsonValue(JsonProperties.NULL_VALUE));
+    assertEquals(BooleanNode.TRUE, toJsonValue(true));
+    assertEquals(IntNode.valueOf(1), toJsonValue(1));
+    assertEquals(LongNode.valueOf(2), toJsonValue(2L));
+    assertEquals(DoubleNode.valueOf(1.0), toJsonValue(1.0f));
+    assertEquals(DoubleNode.valueOf(2.0), toJsonValue(2.0));
+    assertEquals(TextNode.valueOf("\u0001\u0002"), toJsonValue(new byte[] { 1, 2 }));
+    assertEquals(TextNode.valueOf("a"), toJsonValue("a"));
+    assertEquals(TextNode.valueOf("UP"), toJsonValue(Direction.UP));
 
     ArrayNode an = JsonNodeFactory.instance.arrayNode();
     an.add(1);
-    assertEquals(an, toJsonNode(Collections.singletonList(1)));
+    assertEquals(an, toJsonValue(Collections.singletonList(1)));
 
     ObjectNode on = JsonNodeFactory.instance.objectNode();
     on.put("a", 1);
-    assertEquals(on, toJsonNode(Collections.singletonMap("a", 1)));
+    assertEquals(on, toJsonValue(Collections.singletonMap("a", 1)));
   }
 
   @Test
@@ -74,7 +74,7 @@ public class TestJacksonUtils {
     assertEquals(2L, toObject(IntNode.valueOf(2), Schema.create(Schema.Type.LONG)));
     assertEquals(1.0f, toObject(DoubleNode.valueOf(1.0), Schema.create(Schema.Type.FLOAT)));
     assertEquals(2.0, toObject(DoubleNode.valueOf(2.0)));
-    assertEquals(TextNode.valueOf("\u0001\u0002"), toJsonNode(new byte[]{1, 2}));
+    assertEquals(TextNode.valueOf("\u0001\u0002"), toJsonValue(new byte[]{1, 2}));
     assertArrayEquals(new byte[]{1, 2},
         (byte[]) toObject(TextNode.valueOf("\u0001\u0002"), Schema.create(Schema.Type.BYTES)));
     assertEquals("a", toObject(TextNode.valueOf("a")));
